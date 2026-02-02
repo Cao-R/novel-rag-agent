@@ -1,0 +1,128 @@
+import os
+import re
+
+class NovelCleaner:
+    def __init__(self):
+        # 定义垃圾广告的正则模式列表
+        # 这里的模式越丰富，清洗越干净
+        self.ad_patterns = [
+            r"https?://\S+",           # 匹配 http/https 网址
+            r"www\.\S+",               # 匹配 www 开头的网址
+            r"请关注微信公众号.*",      # 匹配公众号广告
+            r"PS：.*",                 # 匹配作者的PS留言
+            r"（本章完）",              # 匹配章节结束标记
+            r"求收藏.*求推荐",          # 匹配求票信息
+            r"一秒记住.*免费阅读！",    # 匹配盗版网站的宣传语
+            r"阅读.*最新章节",
+            r"&nbsp;",                 # HTML空格
+            r"<[^>]+>",
+            r"下载自搜书吧：",           # 搜书吧广告
+        ]
+        # 编译正则，提高后续处理速度
+        self.ad_regex = [re.compile(p, re.IGNORECASE) for p in self.ad_patterns]
+
+    def load_file(self, file_path):
+        """
+        1. 统一编码读取：尝试 utf-8，失败则尝试 gb18030
+        """
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except UnicodeDecodeError:
+            try:
+                # gb18030 兼容 gbk 和 gb2312，是读取老小说的神器
+                with open(file_path, 'r', encoding='gb18030') as f:
+                    return f.read()
+            except Exception as e:
+                print(f"文件 {file_path} 读取失败: {e}")
+                return None
+
+    def remove_ads(self, text):
+        """
+        2. 去除广告和水印
+        """
+        lines = text.split('\n')
+        cleaned_lines = []
+        
+        for line in lines:
+            line = line.strip() # 去除行首尾空格
+            
+            if not line:
+                continue # 暂时跳过空行，后面统一处理
+            
+            # 检查这一行是否命中垃圾正则
+            is_ad = False
+            for pattern in self.ad_regex:
+                if pattern.search(line):
+                    is_ad = True
+                    break
+            
+            # 如果不是广告，且长度大于1（避免保留无意义的单个字符），则保留
+            if not is_ad and len(line) > 1:
+                cleaned_lines.append(line)
+                
+        # 将保留下来的行重新组合
+        return "\n\n".join(cleaned_lines)
+
+    def normalize_layout(self, text):
+        """
+        3. 合并空行与格式标准化
+        """
+        # 替换不可见的全角空格为半角空格
+        text = text.replace('\u3000', ' ').replace('\xa0', ' ')
+        
+        # 核心逻辑：
+        # 这里的 \n\s*\n 匹配：换行符 + (任意数量空格/Tab) + 换行符
+        # 将其替换为 \n\n (标准的段落间隔)
+        # 意思是：不管原来中间隔了多少空行，最后都变成两个换行符
+        text = re.sub(r'\n\s*\n', '\n\n', text)
+        
+        # 再次兜底：防止替换后出现3个以上换行符的情况
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        
+        return text
+
+    def clean_novel(self, file_path, save_path=None):
+        """
+        主流程：读取 -> 清洗 -> 保存
+        """
+        print(f"正在清洗: {file_path}")
+        
+        # 1. 读取
+        content = self.load_file(file_path)
+        if content is None:
+            return None
+        print("文件读取完成。")
+        # 2. 去除广告 (这时候是行列表处理)
+        content = self.remove_ads(content)
+        print("广告去除完成。")
+        # 3. 格式标准化 (这时候是全文处理)
+        content = self.normalize_layout(content)
+        print("格式标准化完成。")
+        # 4. 保存 (可选)
+        if save_path:
+            with open(save_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            print(f"清洗完成，已保存至: {save_path}")
+        
+        return content
+
+# --- 使用示例 ---
+if __name__ == "__main__":
+    cleaner = NovelCleaner()
+    
+    # 假设你的原始文件在 raw_novels 文件夹
+    # 目标文件夹 clean_novels
+    source_dir = "./raw_novels"
+    target_dir = "./clean_novels"
+    
+    if not os.path.exists(target_dir):
+        os.makedirs(target_dir)
+
+    # 模拟一个文件内容用于测试 (如果没有本地文件)
+    # 你可以直接运行这段代码看效果
+    dummy_text = "C:\\Users\\caoran\\Desktop\\小说检索系统\\raw_novels\\大明天下.txt"
+    
+    # 测试内存清洗
+    cleaner.clean_novel(dummy_text, save_path="./clean_novels/大明天下_cleaned.txt")
+
