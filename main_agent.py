@@ -11,6 +11,8 @@ from langgraph.graph.message import add_messages
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
 
+from graph_utils import graph_search_with_llm
+
 # --- 1. 准备工作：加载数据库 ---
 print("正在加载数据库...")
 model_path = os.path.abspath("./models/BAAI/bge-small-zh-v1___5")
@@ -25,11 +27,20 @@ vectorstore = Chroma(
     embedding_function=embedding_func
 )
 
-if "GOOGLE_API_KEY" not in os.environ:
-    os.environ["GOOGLE_API_KEY"] = "AIzaSyBXuDNRF4azEAKO1dKDjUvzI3J4t94xO30"
-print("数据库加载完成。")
-# --- 2. 定义工具 (Tool) ---
-# 这是 Agent 唯一能与数据库交互的接口
+# --- 2. 初始化 LLM ---
+# 温度设为 0，让回答更基于事实
+llm = ChatOllama(model="qwen2.5:7b", temperature=0, timeout=120.0)
+
+# --- 3. 定义工具 (Tool) ---
+# 这是 Agent 与数据库交互的接口
+
+@tool
+def search_graph(query: str):
+    """
+    用于图谱查询（人物关系、事件、章节等）。
+    """
+    result = graph_search_with_llm(query, llm)
+    return result if result else "图谱未命中。"
 
 @tool
 def search_novel(query: str, book_name: str = None):
@@ -60,19 +71,14 @@ def search_novel(query: str, book_name: str = None):
     
     return context if context else "未找到相关内容。"
 
-# --- 3. 构建 Agent 流程 (LangGraph) ---   
+# --- 4. 构建 Agent 流程 (LangGraph) ---   
 
 # 定义状态
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
 
-# 初始化 LLM 
-# 温度设为 0，让回答更基于事实
-llm = ChatOllama(model="qwen2.5:7b", 
-                temperature=0) 
-
 # 绑定工具
-tools = [search_novel]
+tools = [search_graph, search_novel]
 llm_with_tools = llm.bind_tools(tools)
 
 # 节点逻辑：调用模型
@@ -108,7 +114,11 @@ if __name__ == "__main__":
             
         initial_state = {
             "messages": [
-                SystemMessage(content="你是一个精通小说的专家。请根据工具检索到的内容回答问题。如果涉及多本书的对比，请分别检索。"),
+                SystemMessage(content=(
+                    "你是一个精通小说的专家。优先使用图谱回答人物关系、事件、章节等结构化问题。"
+                    "图谱无结果时再使用向量检索补充。"
+                    "如果图谱工具返回了 Cypher 或 Path，请在回答末尾原样保留。"
+                )),
                 HumanMessage(content=user_input)
             ]
         }

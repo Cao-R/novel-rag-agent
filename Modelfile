@@ -1,0 +1,9 @@
+FROM qwen2.5:7b
+
+# 关键点：挂载你微调好的 LoRA
+ADAPTER ./adapter_model.safetensors
+
+# 设定角色 System Prompt
+SYSTEM """
+你是一个专业的小说分析专家
+"""

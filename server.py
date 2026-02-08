@@ -27,6 +27,8 @@ except ImportError:
 
 from langchain_core.prompts import ChatPromptTemplate
 
+from graph_utils import graph_search_with_llm
+
 # 配置 API Key
 os.environ["TAVILY_API_KEY"] = "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"
 
@@ -61,6 +63,9 @@ async def lifespan(app: FastAPI):
     # 创建 Agent 运行对象
     agent_app = create_agent_graph(vectorstore)
     
+    app.state.agent_app = agent_app  # 直接赋值给 app.state
+    app.state.vectorstore = vectorstore
+    
     # 将资源存入 app.state，方便在所有路由中访问
     yield {
         "vectorstore": vectorstore,
@@ -86,7 +91,7 @@ class QueryRewrite(BaseModel):
 # --- 4. 构建 V2 智商增强型图 ---
 def create_agent_graph(vectorstore: Chroma):
     # 初始化 Ollama 模型
-    llm = ChatOllama(model="qwen2.5:7b", format="json", temperature=0)
+    llm = ChatOllama(model="qwen2.5:7b", format="json", temperature=0, timeout=120.0)
     
     # 联网工具
     web_search_tool = TavilySearchResults(k=3)
@@ -97,10 +102,20 @@ def create_agent_graph(vectorstore: Chroma):
         question = state["messages"][0].content
         # 异步执行检索
         loop = asyncio.get_event_loop()
+        graph_text = await loop.run_in_executor(
+            None, lambda: graph_search_with_llm(question, llm)
+        )
         docs = await loop.run_in_executor(
             None, lambda: vectorstore.similarity_search(question, k=3)
         )
-        context = "\n\n".join([f"内容: {d.page_content}" for d in docs])
+
+        context_parts = []
+        if graph_text:
+            context_parts.append("[Graph]\n" + graph_text)
+        if docs:
+            vector_context = "\n\n".join([f"内容: {d.page_content}" for d in docs])
+            context_parts.append("[Vector]\n" + vector_context)
+        context = "\n\n".join(context_parts)
         # 将检索到的资料临时存入 SystemMessage 传给下一个节点
         return {"messages": [SystemMessage(content=context, name="context_data")]}
 
@@ -168,7 +183,7 @@ def create_agent_graph(vectorstore: Chroma):
 
         # 【确认】：这里没有用 f-string，是正确的
         gen_prompt = ChatPromptTemplate.from_messages([
-            ("system", "你是一个精通小说的大模型助手。请根据提供的资料回答问题。如果资料中没有相关信息，请诚实说明。"),
+            ("system", "你是一个精通小说的大模型助手。请根据提供的资料回答问题。如果资料中没有相关信息，请诚实说明。若资料中包含 Cypher 或 Path，请在回答末尾保留。"),
             ("human", "资料内容如下:\n{context}\n\n用户问题: {question}")
         ])
         
